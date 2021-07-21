@@ -177,6 +177,12 @@ extern struct vt_font vt_font_default;
 static struct vt_font vt_font_loader;
 static struct vt_font *vt_font_assigned = &vt_font_default;
 
+#ifdef VT_RIME
+static struct vt_rime vt_rime_default = {
+    .vr_status = 0,
+};
+#endif
+
 #ifndef SC_NO_CUTPASTE
 extern struct vt_mouse_cursor vt_default_mouse_pointer;
 #endif
@@ -976,6 +982,15 @@ vt_processkey(keyboard_t *kbd, struct vt_device *vd, int c)
 		case FKEY | F(61): /* Delete key. */
 			terminal_input_special(vw->vw_terminal, TKEY_DELETE);
 			break;
+#if VT_RIME
+        case VR_KEY:
+            if (vt_toggle_rime_mode(&vt_rime_default)) {
+                printf("Rime mode is enabled!\n");
+            } else {
+                printf("Rime mode is disabled!\n");
+            }
+            break;
+#endif
 		}
 	} else if (KEYFLAGS(c) == 0) {
 		/* Don't do UTF-8 conversion when doing raw mode. */
@@ -991,7 +1006,11 @@ vt_processkey(keyboard_t *kbd, struct vt_device *vd, int c)
 #if defined(KDB)
 			kdb_alt_break(c, &vd->vd_altbrk);
 #endif
-			terminal_input_char(vw->vw_terminal, KEYCHAR(c));
+            if (vt_rime_default.vr_status) {
+                vt_rime_process_char(&vt_rime_default, KEYCHAR(c));
+            } else {
+                terminal_input_char(vw->vw_terminal, KEYCHAR(c));
+            }
 		} else
 			terminal_input_raw(vw->vw_terminal, c);
 	}
@@ -1202,6 +1221,21 @@ vt_determine_colors(term_char_t c, int cursor,
 		*bg = tmp;
 	}
 }
+
+#ifdef VT_RIME
+int
+vt_toggle_rime_mode(struct vt_rime *vr)
+{
+    return vr->vr_status ^= 1;
+}
+
+
+int
+vt_rime_process_char(struct vt_rime *vr, int ch)
+{
+    return (0);
+}
+#endif
 
 #ifndef SC_NO_CUTPASTE
 int

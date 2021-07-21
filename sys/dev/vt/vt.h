@@ -53,6 +53,10 @@
 #include "opt_syscons.h"
 #include "opt_splash.h"
 
+#ifndef VT_RIME
+#define VT_RIME 1
+#endif
+
 #ifndef	VT_MAXWINDOWS
 #ifdef	MAXCONS
 #define	VT_MAXWINDOWS	MAXCONS
@@ -109,6 +113,18 @@ typedef unsigned int	vt_axis_t;
 /*
  * Per-device datastructure.
  */
+
+#ifdef VT_RIME
+struct vt_rime {
+#define VR_KEY  RCTR  /* right control key */
+    int vr_status;  /* Rime-mode status */
+};
+
+int vt_toggle_rime_mode(struct vt_rime *);
+int vt_rime_process_char(struct vt_rime *, int);
+#endif
+
+
 
 #ifndef SC_NO_CUTPASTE
 struct vt_mouse_cursor;

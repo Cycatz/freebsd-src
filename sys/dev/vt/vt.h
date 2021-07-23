@@ -116,11 +116,16 @@ typedef unsigned int	vt_axis_t;
 
 #ifdef VT_RIME
 struct vt_rime {
+
 #define VR_KEY  RCTR  /* right control key */
+#define VR_RIME_CLIENT "/root/tmux-rime/tmux_rime/tmux_rime_client.py"
+#define VR_SOCK_PORT 2133
+
     int vr_status;  /* Rime-mode status */
 };
 
 int vt_toggle_rime_mode(struct vt_rime *);
+int vt_rime_send_char(struct vt_rime *, int);
 int vt_rime_process_char(struct vt_rime *, int);
 #endif
 

@@ -63,6 +63,23 @@ __FBSDID("$FreeBSD$");
 #include <machine/frame.h>
 #endif
 
+#ifdef VT_RIME
+#include <sys/socket.h>
+#include <sys/socketvar.h>
+#include <sys/types.h>
+#include <sys/mbuf.h>
+#include <sys/uio.h>
+
+#include <net/if.h>
+#include <net/if_var.h>
+
+#include <netinet/in.h>
+#include <netinet/in_var.h>
+#include <net/if_types.h>
+#include <net/if_dl.h>
+
+#endif
+
 static int vtterm_cngrab_noswitch(struct vt_device *, struct vt_window *);
 static int vtterm_cnungrab_noswitch(struct vt_device *, struct vt_window *);
 
@@ -1229,10 +1246,71 @@ vt_toggle_rime_mode(struct vt_rime *vr)
     return vr->vr_status ^= 1;
 }
 
+int vt_rime_send_char(struct vt_rime *vr, int ch)
+{
+    struct thread *td = curthread;
+    struct socket *rime_so;
+    // struct sockopt sopt;
+    struct sockaddr_in server_addr;
+
+    struct uio auio;
+    struct iovec iov[1];
+    char hello[] = "Hello";
+    int error = 0;
+
+    error = socreate(PF_INET, &rime_so, SOCK_STREAM, 0, td->td_ucred, td);
+    if (error != 0) {
+        printf("%s: socreate, error=%d", __func__, error);
+        goto out;
+    }
+
+    /* initialize the socket */
+    bzero(&server_addr, sizeof(server_addr));
+    server_addr.sin_len = sizeof(server_addr);
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(VR_SOCK_PORT);
+
+    error = inet_pton(AF_INET, "127.0.0.1", &server_addr);
+    if (error <= 0) {
+        printf("Invalid address/ Address not supproted \n");
+        goto out;
+    }
+
+    error = soconnect(rime_so, (struct sockaddr *) &server_addr, td);
+    if (error != 0) {
+        printf("Connect error!\n");
+        goto out;
+    }
+    /* initialize iovec and uio structure */
+    iov[0].iov_base = (void *)hello;
+    iov[0].iov_len = 6;
+
+    auio.uio_iov = iov;
+    auio.uio_iovcnt = 1;
+    auio.uio_segflg = UIO_SYSSPACE;
+	auio.uio_rw = UIO_WRITE;
+	auio.uio_td = td;
+	auio.uio_offset = 0;			/* XXX */
+	auio.uio_resid = iov[0].iov_len;
+
+    error = sosend(rime_so, (struct sockaddr *) &server_addr, &auio,
+                   (struct mbuf *)NULL, (struct mbuf *)NULL, 0, td);
+    if (error != 0) {
+        printf("sosend=%d\n", error);
+        goto out;
+    }
+
+out:
+        soclose(rime_so);
+        return (error);
+}
 
 int
 vt_rime_process_char(struct vt_rime *vr, int ch)
 {
+    if (ch >= 'a' && ch <= 'z') {
+        return vt_rime_send_char(vr, ch);
+    }
     return (0);
 }
 #endif

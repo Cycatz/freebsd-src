@@ -77,7 +77,6 @@ __FBSDID("$FreeBSD$");
 #include <netinet/in_var.h>
 #include <net/if_types.h>
 #include <net/if_dl.h>
-
 #endif
 
 static int vtterm_cngrab_noswitch(struct vt_device *, struct vt_window *);
@@ -1250,7 +1249,6 @@ int vt_rime_send_char(struct vt_rime *vr, int ch)
 {
     struct thread *td = curthread;
     struct socket *rime_so;
-    // struct sockopt sopt;
     struct sockaddr_in server_addr;
 
     struct uio auio;
@@ -1260,27 +1258,45 @@ int vt_rime_send_char(struct vt_rime *vr, int ch)
 
     error = socreate(PF_INET, &rime_so, SOCK_STREAM, 0, td->td_ucred, td);
     if (error != 0) {
-        printf("%s: socreate, error=%d", __func__, error);
+        printf("%s: socreate, error=%d\n", __func__, error);
         goto out;
     }
 
     /* initialize the socket */
-    bzero(&server_addr, sizeof(server_addr));
-    server_addr.sin_len = sizeof(server_addr);
+    server_addr.sin_len = sizeof(struct sockaddr_in);
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(VR_SOCK_PORT);
+    bzero(&(server_addr.sin_zero), sizeof(server_addr.sin_zero));
 
-    error = inet_pton(AF_INET, "127.0.0.1", &server_addr);
+    error = inet_pton(AF_INET, "127.0.0.1", &(server_addr.sin_addr));
     if (error <= 0) {
-        printf("Invalid address/ Address not supproted \n");
+        printf("Invalid address/ Address not supported \n");
         goto out;
     }
 
     error = soconnect(rime_so, (struct sockaddr *) &server_addr, td);
     if (error != 0) {
-        printf("Connect error!\n");
+        printf("%s: soconnect, error=%d\n", __func__, error);
         goto out;
     }
+
+    /* Wait for rime_so->so_state & SS_ISCONNECTING = 0 */
+    while (rime_so->so_state & SS_ISCONNECTING) {
+        /*
+         * timeo: sleep timo / hz seconds
+         * On my machine, hz is set to 100 (check with `sysctl kern.clockrate`)
+         * so it will sleep 5 / 100 = 0.05 secs
+         */
+        pause(NULL, 5);
+
+        /*
+         * Or you can:
+         * printf("Hello\n");
+         * for(int i = 0; i < 10000000; i++);
+         */
+    }
+
+
     /* initialize iovec and uio structure */
     iov[0].iov_base = (void *)hello;
     iov[0].iov_len = 6;
@@ -1300,9 +1316,11 @@ int vt_rime_send_char(struct vt_rime *vr, int ch)
         goto out;
     }
 
+    printf("Send!\n");
+
 out:
-        soclose(rime_so);
-        return (error);
+    soclose(rime_so);
+    return (error);
 }
 
 int

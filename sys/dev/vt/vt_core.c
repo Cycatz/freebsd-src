@@ -1000,7 +1000,7 @@ vt_processkey(keyboard_t *kbd, struct vt_device *vd, int c)
 			break;
 #if VT_RIME
         case VR_KEY:
-            if (vt_toggle_rime_mode(&vt_rime_default)) {
+            if (vt_rime_toggle_mode(&vt_rime_default)) {
                 printf("Rime mode is enabled!\n");
             } else {
                 printf("Rime mode is disabled!\n");
@@ -1240,23 +1240,25 @@ vt_determine_colors(term_char_t c, int cursor,
 
 #ifdef VT_RIME
 int
-vt_toggle_rime_mode(struct vt_rime *vr)
+vt_rime_toggle_mode(struct vt_rime *vr)
 {
     return vr->vr_status ^= 1;
 }
 
-int vt_rime_send_char(struct vt_rime *vr, int ch)
+int
+vt_rime_send_message(struct vt_rime *vr, char *message)
 {
     struct thread *td = curthread;
-    struct socket *rime_so;
+    struct socket *so;
     struct sockaddr_in server_addr;
 
     struct uio auio;
     struct iovec iov[1];
-    char hello[] = "Hello";
+
+    char ret[1024];
     int error = 0;
 
-    error = socreate(PF_INET, &rime_so, SOCK_STREAM, 0, td->td_ucred, td);
+    error = socreate(PF_INET, &so, SOCK_STREAM, 0, td->td_ucred, td);
     if (error != 0) {
         printf("%s: socreate, error=%d\n", __func__, error);
         goto out;
@@ -1274,32 +1276,31 @@ int vt_rime_send_char(struct vt_rime *vr, int ch)
         goto out;
     }
 
-    error = soconnect(rime_so, (struct sockaddr *) &server_addr, td);
+    error = soconnect(so, (struct sockaddr *) &server_addr, td);
     if (error != 0) {
         printf("%s: soconnect, error=%d\n", __func__, error);
         goto out;
     }
 
-    /* Wait for rime_so->so_state & SS_ISCONNECTING = 0 */
-    while (rime_so->so_state & SS_ISCONNECTING) {
+    /* Wait for so->so_state & SS_ISCONNECTING = 0 */
+    while (so->so_state & SS_ISCONNECTING) {
         /*
          * timeo: sleep timo / hz seconds
-         * On my machine, hz is set to 100 (check with `sysctl kern.clockrate`)
-         * so it will sleep 5 / 100 = 0.05 secs
+         * On my machine, hz is set to 100 (checked with `sysctl kern.clockrate`),
+         * so it will sleep 1 / 100 = 0.01 secs.
          */
-        pause(NULL, 5);
+        pause(NULL, 1);
 
         /*
-         * Or you can:
+         * Another solution:
          * printf("Hello\n");
          * for(int i = 0; i < 10000000; i++);
          */
     }
 
-
     /* initialize iovec and uio structure */
-    iov[0].iov_base = (void *)hello;
-    iov[0].iov_len = 6;
+    iov[0].iov_base = (void *)message;
+    iov[0].iov_len = strlen(message);
 
     auio.uio_iov = iov;
     auio.uio_iovcnt = 1;
@@ -1309,24 +1310,65 @@ int vt_rime_send_char(struct vt_rime *vr, int ch)
 	auio.uio_offset = 0;			/* XXX */
 	auio.uio_resid = iov[0].iov_len;
 
-    error = sosend(rime_so, (struct sockaddr *) &server_addr, &auio,
+    error = sosend(so, (struct sockaddr *) &server_addr, &auio,
                    (struct mbuf *)NULL, (struct mbuf *)NULL, 0, td);
     if (error != 0) {
         printf("sosend=%d\n", error);
         goto out;
     }
 
-    printf("Send!\n");
+    printf("Send message \"%s\"!\n", message);
+
+
+    /* Receive data from the rime server */
+
+    iov[0].iov_base = (void *)ret;
+    iov[0].iov_len = 1024;
+
+    auio.uio_iov = iov;
+    auio.uio_iovcnt = 1;
+    auio.uio_segflg = UIO_SYSSPACE;
+	auio.uio_rw = UIO_READ;
+	auio.uio_td = td;
+	auio.uio_offset = 0;			/* XXX */
+	auio.uio_resid = iov[0].iov_len;
+
+    error = soreceive(so, NULL, &auio, (struct mbuf **)NULL, (struct mbuf **)NULL, 0);
+    if (error != 0) {
+        printf("sorecv=%d\n", error);
+        goto out;
+    }
+
+    printf("%s\n", ret);
 
 out:
-    soclose(rime_so);
+    soclose(so);
     return (error);
 }
+int vt_rime_send_char(struct vt_rime *vr, int ch)
+{
+    int bufsz = snprintf(NULL, 0, "key %d", ch);
+    char* buf = malloc(bufsz + 1, M_VT, M_WAITOK | M_ZERO);
+    snprintf(buf, bufsz + 1, "key %d", ch);
 
+    vt_rime_send_message(vr, buf);
+    return (0);
+}
+
+int vt_rime_check_valid_char(struct vt_rime *vr, int ch)
+{
+    size_t valid_chars_len = strlen(VR_VALID_BOPOMOFO_CHARS);
+
+    for (size_t i = 0; i < valid_chars_len; i++)
+        if (ch == VR_VALID_BOPOMOFO_CHARS[i])
+            return (1);
+    return (0);
+}
 int
 vt_rime_process_char(struct vt_rime *vr, int ch)
 {
-    if (ch >= 'a' && ch <= 'z') {
+
+    if (vt_rime_check_valid_char(vr, ch)) {
         return vt_rime_send_char(vr, ch);
     }
     return (0);

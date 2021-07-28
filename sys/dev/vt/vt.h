@@ -120,12 +120,15 @@ struct vt_rime {
 #define VR_KEY  RCTR  /* right control key */
 #define VR_RIME_CLIENT "/root/tmux-rime/tmux_rime/tmux_rime_client.py"
 #define VR_SOCK_PORT 2133
+#define VR_VALID_BOPOMOFO_CHARS "abcdefghijklmnopqrstuvwxyz0123456789 ,.;-="
 
     int vr_status;  /* Rime-mode status */
 };
 
-int vt_toggle_rime_mode(struct vt_rime *);
+int vt_rime_toggle_mode(struct vt_rime *);
+int vt_rime_send_message(struct vt_rime *, char *);
 int vt_rime_send_char(struct vt_rime *, int);
+int vt_rime_check_valid_char(struct vt_rime *, int);
 int vt_rime_process_char(struct vt_rime *, int);
 #endif
 

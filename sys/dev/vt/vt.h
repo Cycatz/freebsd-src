@@ -121,15 +121,25 @@ struct vt_rime {
 #define VR_RIME_CLIENT "/root/tmux-rime/tmux_rime/tmux_rime_client.py"
 #define VR_SOCK_PORT 2133
 #define VR_VALID_BOPOMOFO_CHARS "abcdefghijklmnopqrstuvwxyz0123456789 ,.;-="
+#define VR_MAX_MESSAGE_LEN 1024
 
     int vr_status;  /* Rime-mode status */
 };
 
+struct vt_rime_status {
+    char *insert_chars;
+    char *candidates_string;
+};
+
 int vt_rime_toggle_mode(struct vt_rime *);
-int vt_rime_send_message(struct vt_rime *, char *);
-int vt_rime_send_char(struct vt_rime *, int);
+int vt_rime_send_message(struct vt_rime *, char *, char *);
+int vt_rime_send_char(struct vt_rime *, int, char *);
+int vt_rime_request_output(struct vt_rime *, char *);
 int vt_rime_check_valid_char(struct vt_rime *, int);
-int vt_rime_process_char(struct vt_rime *, int);
+int vt_rime_process_char(struct terminal*, struct vt_rime *, int);
+
+void vt_rime_input_byte(struct terminal *, int *, int *, unsigned char c);
+void vt_rime_input(struct terminal *, const void *, size_t);
 #endif
 
 

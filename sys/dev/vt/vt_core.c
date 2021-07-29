@@ -1022,13 +1022,16 @@ vt_processkey(keyboard_t *kbd, struct vt_device *vd, int c)
 #if defined(KDB)
 			kdb_alt_break(c, &vd->vd_altbrk);
 #endif
-            if (vt_rime_default.vr_status) {
-                vt_rime_process_char(&vt_rime_default, KEYCHAR(c));
-            } else {
+
+#if VT_RIME
+            if (vt_rime_default.vr_status)
+                vt_rime_process_char(vw->vw_terminal, &vt_rime_default, KEYCHAR(c));
+            else
+#endif
                 terminal_input_char(vw->vw_terminal, KEYCHAR(c));
-            }
-		} else
-			terminal_input_raw(vw->vw_terminal, c);
+        } else
+            terminal_input_raw(vw->vw_terminal, c);
+
 	}
 	return (0);
 }
@@ -1246,7 +1249,7 @@ vt_rime_toggle_mode(struct vt_rime *vr)
 }
 
 int
-vt_rime_send_message(struct vt_rime *vr, char *message)
+vt_rime_send_message(struct vt_rime *vr, char *message, char *ret)
 {
     struct thread *td = curthread;
     struct socket *so;
@@ -1255,7 +1258,6 @@ vt_rime_send_message(struct vt_rime *vr, char *message)
     struct uio auio;
     struct iovec iov[1];
 
-    char ret[1024];
     int error = 0;
 
     error = socreate(PF_INET, &so, SOCK_STREAM, 0, td->td_ucred, td);
@@ -1300,6 +1302,8 @@ vt_rime_send_message(struct vt_rime *vr, char *message)
 
     /* initialize iovec and uio structure */
     iov[0].iov_base = (void *)message;
+
+    /* don't send '\0' in last byte */
     iov[0].iov_len = strlen(message);
 
     auio.uio_iov = iov;
@@ -1323,7 +1327,7 @@ vt_rime_send_message(struct vt_rime *vr, char *message)
     /* Receive data from the rime server */
 
     iov[0].iov_base = (void *)ret;
-    iov[0].iov_len = 1024;
+    iov[0].iov_len = VR_MAX_MESSAGE_LEN;
 
     auio.uio_iov = iov;
     auio.uio_iovcnt = 1;
@@ -1339,19 +1343,29 @@ vt_rime_send_message(struct vt_rime *vr, char *message)
         goto out;
     }
 
-    printf("%s\n", ret);
-
 out:
     soclose(so);
     return (error);
 }
-int vt_rime_send_char(struct vt_rime *vr, int ch)
+
+int vt_rime_send_char(struct vt_rime *vr, int ch, char *ret)
 {
-    int bufsz = snprintf(NULL, 0, "key %d", ch);
-    char* buf = malloc(bufsz + 1, M_VT, M_WAITOK | M_ZERO);
+    int bufsz;
+    char *buf;
+
+    bufsz = snprintf(NULL, 0, "key %d", ch);
+    buf = malloc(bufsz + 1, M_VT, M_WAITOK | M_ZERO);
     snprintf(buf, bufsz + 1, "key %d", ch);
 
-    vt_rime_send_message(vr, buf);
+    vt_rime_send_message(vr, buf, ret);
+    return (0);
+}
+
+int vt_rime_request_output(struct vt_rime *vr, char *ret)
+{
+    char buf[] = "output";
+
+    vt_rime_send_message(vr, buf, ret);
     return (0);
 }
 
@@ -1364,12 +1378,69 @@ int vt_rime_check_valid_char(struct vt_rime *vr, int ch)
             return (1);
     return (0);
 }
-int
-vt_rime_process_char(struct vt_rime *vr, int ch)
+
+void
+vt_rime_input_byte(struct terminal *term, int *utf8_left, int *utf8_partial, unsigned char c)
 {
 
+	/*
+	 * UTF-8 handling.
+	 */
+	if ((c & 0x80) == 0x00) {
+		/* One-byte sequence. */
+		*utf8_left = 0;
+        terminal_input_char(term, c);
+	} else if ((c & 0xe0) == 0xc0) {
+		/* Two-byte sequence. */
+		*utf8_left = 1;
+		*utf8_partial = c & 0x1f;
+	} else if ((c & 0xf0) == 0xe0) {
+		/* Three-byte sequence. */
+		*utf8_left = 2;
+		*utf8_partial = c & 0x0f;
+	} else if ((c & 0xf8) == 0xf0) {
+		/* Four-byte sequence. */
+		*utf8_left = 3;
+		*utf8_partial = c & 0x07;
+	} else if ((c & 0xc0) == 0x80) {
+		if (*utf8_left == 0)
+			return;
+		(*utf8_left)--;
+		*utf8_partial = (*utf8_partial << 6) | (c & 0x3f);
+		if (*utf8_left == 0) {
+			printf("Got UTF-8 char %x\n", *utf8_partial);
+            terminal_input_char(term, *utf8_partial);
+		}
+	}
+}
+
+void
+vt_rime_input(struct terminal *term, const void *buf, size_t len)
+{
+    int utf8_left;
+    uint32_t utf8_partial;
+	const char *c = buf;
+
+	while (len-- > 0)
+        vt_rime_input_byte(term, &utf8_left, &utf8_partial, *c++);
+}
+
+int
+vt_rime_process_char(struct terminal *term, struct vt_rime *vr, int ch)
+{
+    char *status, *output;
+    // size_t len;
+
     if (vt_rime_check_valid_char(vr, ch)) {
-        return vt_rime_send_char(vr, ch);
+        status = malloc(VR_MAX_MESSAGE_LEN, M_VT, M_WAITOK | M_ZERO);
+        vt_rime_send_char(vr, ch, status);
+
+        output = malloc(VR_MAX_MESSAGE_LEN, M_VT, M_WAITOK | M_ZERO);
+        vt_rime_request_output(vr, output);
+
+        printf("Status: %s\n", status);
+
+        vt_rime_input(term, output, strlen(output));
     }
     return (0);
 }

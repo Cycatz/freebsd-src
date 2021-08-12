@@ -114,33 +114,6 @@ typedef unsigned int	vt_axis_t;
  * Per-device datastructure.
  */
 
-#ifdef VT_RIME
-struct vt_rime {
-
-#define VR_KEY  RCTR  /* right control key */
-#define VR_RIME_CLIENT "/root/tmux-rime/tmux_rime/tmux_rime_client.py"
-#define VR_SOCK_PORT 2133
-#define VR_VALID_BOPOMOFO_CHARS "abcdefghijklmnopqrstuvwxyz0123456789 ,.;-="
-#define VR_MAX_MESSAGE_LEN 1024
-
-    int vr_status;  /* Rime-mode status */
-};
-
-struct vt_rime_status {
-    char *insert_chars;
-    char *candidates_string;
-};
-
-int vt_rime_toggle_mode(struct vt_rime *);
-int vt_rime_send_message(struct vt_rime *, char *, char *);
-int vt_rime_send_char(struct vt_rime *, int, char *);
-int vt_rime_request_output(struct vt_rime *, char *);
-int vt_rime_check_valid_char(struct vt_rime *, int);
-int vt_rime_process_char(struct terminal*, struct vt_rime *, int);
-
-void vt_rime_input_byte(struct terminal *, int *, int *, unsigned char c);
-void vt_rime_input(struct terminal *, const void *, size_t);
-#endif
 
 
 
@@ -246,6 +219,8 @@ struct vt_buf {
 	term_rect_t		 vb_dirtyrect;	/* (b) Dirty rectangle. */
 	term_char_t		*vb_buffer;	/* (u) Data buffer. */
 	term_char_t		**vb_rows;	/* (u) Array of rows */
+
+	term_char_t		*vb_ime_buffer; /* (u) IME status bar buffer. */
 };
 
 #ifdef SC_HISTORY_SIZE
@@ -291,8 +266,8 @@ void vtbuf_extract_marked(struct vt_buf *vb, term_char_t *buf, int sz);
 	((vb)->vb_history_size)
 #define	VTBUF_GET_ROW(vb, r) \
 	((vb)->vb_rows[((vb)->vb_roffset + (r)) % VTBUF_MAX_HEIGHT(vb)])
-#define	VTBUF_GET_FIELD(vb, r, c) \
-	((vb)->vb_rows[((vb)->vb_roffset + (r)) % VTBUF_MAX_HEIGHT(vb)][(c)])
+// #define	VTBUF_GET_FIELD(vb, r, c)                                   \
+// 	((vb)->vb_rows[((vb)->vb_roffset + (r)) % VTBUF_MAX_HEIGHT(vb)][(c)])
 #define	VTBUF_FIELD(vb, r, c) \
 	((vb)->vb_rows[((vb)->vb_curroffset + (r)) % VTBUF_MAX_HEIGHT(vb)][(c)])
 #define	VTBUF_ISCURSOR(vb, r, c) \
@@ -483,5 +458,52 @@ extern const unsigned int vt_logo_sprite_height;
 extern const unsigned int vt_logo_sprite_width;
 
 void vtterm_draw_cpu_logos(struct vt_device *);
+
+
+#ifdef VT_RIME
+struct vt_rime {
+
+#define VR_KEY  RCTR  /* right control key */
+#define VR_SOCK_PORT 2133
+#define VR_VALID_BOPOMOFO_CHARS "abcdefghijklmnopqrstuvwxyz0123456789 ,.;-=/"
+#define VR_MAX_MESSAGE_LEN 1024
+#define VR_STATUS_BAR_HEIGHT 1
+
+    int vr_status;  /* Rime-mode status */
+};
+
+struct vt_rime_status {
+    char *insert_chars;
+    char *candidates_string;
+};
+
+int vt_rime_toggle_mode(struct vt_rime *vr, struct vt_device *vd);
+int vt_rime_is_enabled(struct vt_rime *vr);
+
+int vt_rime_send_message(struct vt_rime *vr, char *, char *);
+int vt_rime_send_char(struct vt_rime *vr, int, char *);
+int vt_rime_delete(struct vt_rime *vr, char *);
+int vt_rime_request_output(struct vt_rime *vr, char *);
+int vt_rime_check_valid_char(struct vt_rime *vr, int);
+int vt_rime_process_char(struct terminal*, struct vt_rime *vr, int);
+
+int vt_rime_convert_utf8_byte(int *utf8_left, int *utf8_partial, unsigned char c);
+void vt_rime_input(struct terminal *, const void *, size_t);
+
+void vt_rime_draw_status_bar(char *);
+
+
+inline term_char_t VTBUF_GET_FIELD(const struct vt_buf *vb, int r, int c)
+{
+    if (r == 0) {
+        return vb->vb_ime_buffer[c];
+    } else {
+        return ((vb)->vb_rows[((vb)->vb_roffset + (r)) % VTBUF_MAX_HEIGHT(vb)][(c)]);
+    }
+}
+
+
+extern int vt_test;
+#endif
 
 #endif /* !_DEV_VT_VT_H_ */

@@ -77,6 +77,9 @@ __FBSDID("$FreeBSD$");
 #include <netinet/in_var.h>
 #include <net/if_types.h>
 #include <net/if_dl.h>
+
+#include <teken/teken.h>
+#include <teken/teken_wcwidth.h>
 #endif
 
 static int vtterm_cngrab_noswitch(struct vt_device *, struct vt_window *);
@@ -259,10 +262,12 @@ struct vt_device	vt_consdev = {
 };
 static term_char_t vt_constextbuf[(_VTDEFW) * (VBF_DEFAULT_HISTORY_SIZE)];
 static term_char_t *vt_constextbufrows[VBF_DEFAULT_HISTORY_SIZE];
+static term_char_t vt_imebuf[(_VTDEFW)];
 static struct vt_window	vt_conswindow = {
 	.vw_number = VT_CONSWINDOW,
 	.vw_flags = VWF_CONSOLE,
 	.vw_buf = {
+        .vb_ime_buffer = &vt_imebuf[0],
 		.vb_buffer = &vt_constextbuf[0],
 		.vb_rows = &vt_constextbufrows[0],
 		.vb_history_size = VBF_DEFAULT_HISTORY_SIZE,
@@ -1000,10 +1005,10 @@ vt_processkey(keyboard_t *kbd, struct vt_device *vd, int c)
 			break;
 #if VT_RIME
         case VR_KEY:
-            if (vt_rime_toggle_mode(&vt_rime_default)) {
-                printf("Rime mode is enabled!\n");
+            if (vt_rime_toggle_mode(&vt_rime_default, vd)) {
+                DPRINTF(10, "Rime mode is enabled!\n");
             } else {
-                printf("Rime mode is disabled!\n");
+                DPRINTF(10, "Rime mode is disabled!\n");
             }
             break;
 #endif
@@ -1024,7 +1029,7 @@ vt_processkey(keyboard_t *kbd, struct vt_device *vd, int c)
 #endif
 
 #if VT_RIME
-            if (vt_rime_default.vr_status)
+            if (vt_rime_is_enabled(&vt_rime_default))
                 vt_rime_process_char(vw->vw_terminal, &vt_rime_default, KEYCHAR(c));
             else
 #endif
@@ -1240,211 +1245,6 @@ vt_determine_colors(term_char_t c, int cursor,
 		*bg = tmp;
 	}
 }
-
-#ifdef VT_RIME
-int
-vt_rime_toggle_mode(struct vt_rime *vr)
-{
-    return vr->vr_status ^= 1;
-}
-
-int
-vt_rime_send_message(struct vt_rime *vr, char *message, char *ret)
-{
-    struct thread *td = curthread;
-    struct socket *so;
-    struct sockaddr_in server_addr;
-
-    struct uio auio;
-    struct iovec iov[1];
-
-    int error = 0;
-
-    error = socreate(PF_INET, &so, SOCK_STREAM, 0, td->td_ucred, td);
-    if (error != 0) {
-        printf("%s: socreate, error=%d\n", __func__, error);
-        goto out;
-    }
-
-    /* initialize the socket */
-    server_addr.sin_len = sizeof(struct sockaddr_in);
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(VR_SOCK_PORT);
-    bzero(&(server_addr.sin_zero), sizeof(server_addr.sin_zero));
-
-    error = inet_pton(AF_INET, "127.0.0.1", &(server_addr.sin_addr));
-    if (error <= 0) {
-        printf("Invalid address/ Address not supported \n");
-        goto out;
-    }
-
-    error = soconnect(so, (struct sockaddr *) &server_addr, td);
-    if (error != 0) {
-        printf("%s: soconnect, error=%d\n", __func__, error);
-        goto out;
-    }
-
-    /* Wait for so->so_state & SS_ISCONNECTING = 0 */
-    while (so->so_state & SS_ISCONNECTING) {
-        /*
-         * timeo: sleep timo / hz seconds
-         * On my machine, hz is set to 100 (checked with `sysctl kern.clockrate`),
-         * so it will sleep 1 / 100 = 0.01 secs.
-         */
-        pause(NULL, 1);
-
-        /*
-         * Another solution:
-         * printf("Hello\n");
-         * for(int i = 0; i < 10000000; i++);
-         */
-    }
-
-    /* initialize iovec and uio structure */
-    iov[0].iov_base = (void *)message;
-
-    /* don't send '\0' in last byte */
-    iov[0].iov_len = strlen(message);
-
-    auio.uio_iov = iov;
-    auio.uio_iovcnt = 1;
-    auio.uio_segflg = UIO_SYSSPACE;
-	auio.uio_rw = UIO_WRITE;
-	auio.uio_td = td;
-	auio.uio_offset = 0;			/* XXX */
-	auio.uio_resid = iov[0].iov_len;
-
-    error = sosend(so, (struct sockaddr *) &server_addr, &auio,
-                   (struct mbuf *)NULL, (struct mbuf *)NULL, 0, td);
-    if (error != 0) {
-        printf("sosend=%d\n", error);
-        goto out;
-    }
-
-    printf("Send message \"%s\"!\n", message);
-
-
-    /* Receive data from the rime server */
-
-    iov[0].iov_base = (void *)ret;
-    iov[0].iov_len = VR_MAX_MESSAGE_LEN;
-
-    auio.uio_iov = iov;
-    auio.uio_iovcnt = 1;
-    auio.uio_segflg = UIO_SYSSPACE;
-	auio.uio_rw = UIO_READ;
-	auio.uio_td = td;
-	auio.uio_offset = 0;			/* XXX */
-	auio.uio_resid = iov[0].iov_len;
-
-    error = soreceive(so, NULL, &auio, (struct mbuf **)NULL, (struct mbuf **)NULL, 0);
-    if (error != 0) {
-        printf("sorecv=%d\n", error);
-        goto out;
-    }
-
-out:
-    soclose(so);
-    return (error);
-}
-
-int vt_rime_send_char(struct vt_rime *vr, int ch, char *ret)
-{
-    int bufsz;
-    char *buf;
-
-    bufsz = snprintf(NULL, 0, "key %d", ch);
-    buf = malloc(bufsz + 1, M_VT, M_WAITOK | M_ZERO);
-    snprintf(buf, bufsz + 1, "key %d", ch);
-
-    vt_rime_send_message(vr, buf, ret);
-    return (0);
-}
-
-int vt_rime_request_output(struct vt_rime *vr, char *ret)
-{
-    char buf[] = "output";
-
-    vt_rime_send_message(vr, buf, ret);
-    return (0);
-}
-
-int vt_rime_check_valid_char(struct vt_rime *vr, int ch)
-{
-    size_t valid_chars_len = strlen(VR_VALID_BOPOMOFO_CHARS);
-
-    for (size_t i = 0; i < valid_chars_len; i++)
-        if (ch == VR_VALID_BOPOMOFO_CHARS[i])
-            return (1);
-    return (0);
-}
-
-void
-vt_rime_input_byte(struct terminal *term, int *utf8_left, int *utf8_partial, unsigned char c)
-{
-
-	/*
-	 * UTF-8 handling.
-	 */
-	if ((c & 0x80) == 0x00) {
-		/* One-byte sequence. */
-		*utf8_left = 0;
-        terminal_input_char(term, c);
-	} else if ((c & 0xe0) == 0xc0) {
-		/* Two-byte sequence. */
-		*utf8_left = 1;
-		*utf8_partial = c & 0x1f;
-	} else if ((c & 0xf0) == 0xe0) {
-		/* Three-byte sequence. */
-		*utf8_left = 2;
-		*utf8_partial = c & 0x0f;
-	} else if ((c & 0xf8) == 0xf0) {
-		/* Four-byte sequence. */
-		*utf8_left = 3;
-		*utf8_partial = c & 0x07;
-	} else if ((c & 0xc0) == 0x80) {
-		if (*utf8_left == 0)
-			return;
-		(*utf8_left)--;
-		*utf8_partial = (*utf8_partial << 6) | (c & 0x3f);
-		if (*utf8_left == 0) {
-			printf("Got UTF-8 char %x\n", *utf8_partial);
-            terminal_input_char(term, *utf8_partial);
-		}
-	}
-}
-
-void
-vt_rime_input(struct terminal *term, const void *buf, size_t len)
-{
-    int utf8_left;
-    uint32_t utf8_partial;
-	const char *c = buf;
-
-	while (len-- > 0)
-        vt_rime_input_byte(term, &utf8_left, &utf8_partial, *c++);
-}
-
-int
-vt_rime_process_char(struct terminal *term, struct vt_rime *vr, int ch)
-{
-    char *status, *output;
-    // size_t len;
-
-    if (vt_rime_check_valid_char(vr, ch)) {
-        status = malloc(VR_MAX_MESSAGE_LEN, M_VT, M_WAITOK | M_ZERO);
-        vt_rime_send_char(vr, ch, status);
-
-        output = malloc(VR_MAX_MESSAGE_LEN, M_VT, M_WAITOK | M_ZERO);
-        vt_rime_request_output(vr, output);
-
-        printf("Status: %s\n", status);
-
-        vt_rime_input(term, output, strlen(output));
-    }
-    return (0);
-}
-#endif
 
 #ifndef SC_NO_CUTPASTE
 int
@@ -3415,3 +3215,299 @@ vt_resume(struct vt_device *vd)
 	vt_proc_window_switch(vd->vd_savedwindow);
 	vd->vd_savedwindow = NULL;
 }
+
+#ifdef VT_RIME
+
+int
+vt_rime_is_enabled(struct vt_rime *vr)
+{
+
+    return vr->vr_status; 
+}
+
+int
+vt_rime_toggle_mode(struct vt_rime *vr, struct vt_device *vd)
+{
+    return vr->vr_status ^= 1;
+}
+
+int
+vt_rime_send_message(struct vt_rime *vr, char *message, char *ret)
+{
+    struct thread *td = curthread;
+    struct socket *so;
+    struct sockaddr_in server_addr;
+
+    struct uio auio;
+    struct iovec iov[1];
+
+    int error = 0;
+
+    error = socreate(PF_INET, &so, SOCK_STREAM, 0, td->td_ucred, td);
+    if (error != 0) {
+        printf("%s: socreate, error=%d\n", __func__, error);
+        goto out;
+    }
+
+    /* initialize the socket */
+    server_addr.sin_len = sizeof(struct sockaddr_in);
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(VR_SOCK_PORT);
+    bzero(&(server_addr.sin_zero), sizeof(server_addr.sin_zero));
+
+    error = inet_pton(AF_INET, "127.0.0.1", &(server_addr.sin_addr));
+    if (error <= 0) {
+        printf("Invalid address/ Address not supported \n");
+        goto out;
+    }
+
+    error = soconnect(so, (struct sockaddr *) &server_addr, td);
+    if (error != 0) {
+        printf("%s: soconnect, error=%d\n", __func__, error);
+        goto out;
+    }
+
+    /* Wait for so->so_state & SS_ISCONNECTING = 0 */
+    while (so->so_state & SS_ISCONNECTING) {
+        /*
+         * timeo: sleep timo / hz seconds
+         * On my machine, hz is set to 100 (checked with `sysctl kern.clockrate`),
+         * so it will sleep 1 / 100 = 0.01 secs.
+         */
+        pause(NULL, 1);
+
+        /*
+         * Another solution:
+         * printf("Hello\n");
+         * for(int i = 0; i < 10000000; i++);
+         */
+    }
+
+    /* initialize iovec and uio structure */
+    iov[0].iov_base = (void *)message;
+
+    /* don't send '\0' in last byte */
+    iov[0].iov_len = strlen(message);
+
+    auio.uio_iov = iov;
+    auio.uio_iovcnt = 1;
+    auio.uio_segflg = UIO_SYSSPACE;
+	auio.uio_rw = UIO_WRITE;
+	auio.uio_td = td;
+	auio.uio_offset = 0;			/* XXX */
+	auio.uio_resid = iov[0].iov_len;
+
+    error = sosend(so, (struct sockaddr *) &server_addr, &auio,
+                   (struct mbuf *)NULL, (struct mbuf *)NULL, 0, td);
+    if (error != 0) {
+        printf("sosend=%d\n", error);
+        goto out;
+    }
+
+    DPRINTF(10, "Send message \"%s\"!\n", message);
+
+
+    /* Receive data from the rime server */
+
+    iov[0].iov_base = (void *)ret;
+    iov[0].iov_len = VR_MAX_MESSAGE_LEN;
+
+    auio.uio_iov = iov;
+    auio.uio_iovcnt = 1;
+    auio.uio_segflg = UIO_SYSSPACE;
+	auio.uio_rw = UIO_READ;
+	auio.uio_td = td;
+	auio.uio_offset = 0;			/* XXX */
+	auio.uio_resid = iov[0].iov_len;
+
+    error = soreceive(so, NULL, &auio, (struct mbuf **)NULL, (struct mbuf **)NULL, 0);
+    if (error != 0) {
+        printf("sorecv=%d\n", error);
+        goto out;
+    }
+
+out:
+    soclose(so);
+    return (error);
+}
+
+int vt_rime_send_char(struct vt_rime *vr, int ch, char *ret)
+{
+    int bufsz;
+    char *buf;
+
+    bufsz = snprintf(NULL, 0, "key %d", ch);
+    buf = malloc(bufsz + 1, M_VT, M_WAITOK | M_ZERO);
+    snprintf(buf, bufsz + 1, "key %d", ch);
+
+    vt_rime_send_message(vr, buf, ret);
+    return (0);
+}
+
+int vt_rime_delete(struct vt_rime *vr, char *ret)
+{
+    char buf[] = "delete";
+
+    vt_rime_send_message(vr, buf, ret);
+    return (0);
+}
+
+int vt_rime_request_output(struct vt_rime *vr, char *ret)
+{
+    char buf[] = "output";
+
+    vt_rime_send_message(vr, buf, ret);
+    return (0);
+}
+
+int vt_rime_check_valid_char(struct vt_rime *vr, int ch)
+{
+    size_t valid_chars_len = strlen(VR_VALID_BOPOMOFO_CHARS);
+
+    for (size_t i = 0; i < valid_chars_len; i++)
+        if (ch == VR_VALID_BOPOMOFO_CHARS[i])
+            return (1);
+    return (0);
+}
+
+int
+vt_rime_convert_utf8_byte(int *utf8_left, int *utf8_partial, unsigned char c)
+{
+	/*
+	 * UTF-8 handling.
+	 */
+	if ((c & 0x80) == 0x00) {
+		/* One-byte sequence. */
+		*utf8_left = 0;
+        *utf8_partial = c;
+        return (1);
+	} else if ((c & 0xe0) == 0xc0) {
+		/* Two-byte sequence. */
+		*utf8_left = 1;
+		*utf8_partial = c & 0x1f;
+        return (0);
+	} else if ((c & 0xf0) == 0xe0) {
+		/* Three-byte sequence. */
+		*utf8_left = 2;
+		*utf8_partial = c & 0x0f;
+        return (0);
+	} else if ((c & 0xf8) == 0xf0) {
+		/* Four-byte sequence. */
+		*utf8_left = 3;
+		*utf8_partial = c & 0x07;
+        return (0);
+	} else if ((c & 0xc0) == 0x80) {
+		if (*utf8_left == 0)
+			return (-1);
+		(*utf8_left)--;
+		*utf8_partial = (*utf8_partial << 6) | (c & 0x3f);
+		if (*utf8_left == 0) {
+			DPRINTF(10, "Got UTF-8 char %x\n", *utf8_partial);
+            return (1);
+		}
+	}
+    return (-1);
+}
+
+void
+vt_rime_input(struct terminal *term, const void *buf, size_t len)
+{
+    int ret;
+    int utf8_left;
+    uint32_t utf8_partial;
+	const char *c = buf;
+
+	while (len-- > 0) {
+        ret = vt_rime_convert_utf8_byte(&utf8_left, &utf8_partial, *c++);
+        if (ret > 0)
+            terminal_input_char(term, utf8_partial);
+    }
+}
+
+int
+vt_rime_process_char(struct terminal *term, struct vt_rime *vr, int ch)
+{
+    char *status, *output;
+    // size_t len;
+
+    if (vt_rime_check_valid_char(vr, ch)) {
+
+        status = malloc(VR_MAX_MESSAGE_LEN, M_VT, M_WAITOK | M_ZERO);
+        vt_rime_send_char(vr, ch, status);
+
+        output = malloc(VR_MAX_MESSAGE_LEN, M_VT, M_WAITOK | M_ZERO);
+        vt_rime_request_output(vr, output);
+
+        vt_rime_draw_status_bar(status);
+        vt_rime_input(term, output, strlen(output));
+    }
+
+    // Backspace
+    if (ch == 0x8) {
+
+        status = malloc(VR_MAX_MESSAGE_LEN, M_VT, M_WAITOK | M_ZERO);
+        vt_rime_delete(vr, status);
+
+        vt_rime_draw_status_bar(status);
+    }
+    return (0);
+}
+
+void vt_rime_draw_status_bar(char *status)
+{
+
+    struct vt_device *vd; 
+    struct vt_window *vw; 
+    struct vt_buf *vb; 
+
+	const teken_attr_t *a;
+	term_char_t ch;
+	term_rect_t tarea;
+
+    int ret;
+    int len, blen = 0;
+    int utf8_left;
+    uint32_t utf8_partial;
+	const char *c = status;
+
+    vd = main_vd;
+	vw = vd->vd_curwindow;
+    vb = &vw->vw_buf;
+
+	a = teken_get_curattr(&vb->vb_terminal->tm_emulator);
+    ch = FG_WHITE | BG_BLUE;
+
+    len = strlen(status);
+
+	while (len-- > 0) {
+        ret = vt_rime_convert_utf8_byte(&utf8_left, &utf8_partial, *c++);
+        if (ret <= 0) continue;
+
+        if (teken_wcwidth(utf8_partial) == 2 && blen < vb->vb_scr_size.tp_col - 2) {
+            vb->vb_ime_buffer[blen++] = utf8_partial | (ch);
+            vb->vb_ime_buffer[blen++] = utf8_partial | (ch) | TFORMAT(TF_CJK_RIGHT);
+        } else if (blen < vb->vb_scr_size.tp_col - 1) {
+            vb->vb_ime_buffer[blen++] = utf8_partial | (ch);
+        } else {
+            break;
+        }
+    }
+
+    for (int i = blen; i < vb->vb_scr_size.tp_col; i++) {
+        vb->vb_ime_buffer[i] = VTBUF_SPACE_CHAR(ch);
+    }
+
+    tarea.tr_begin.tp_row = tarea.tr_begin.tp_col = 0;
+    tarea.tr_end.tp_row = 1;
+    tarea.tr_end.tp_col = vb->vb_scr_size.tp_col;
+
+    vtbuf_lock(&vw->vw_buf);
+	if (vd->vd_driver->vd_invalidate_text)
+		vd->vd_driver->vd_invalidate_text(vd, &tarea);
+	vtbuf_dirty(&vw->vw_buf, &tarea);
+    vtbuf_unlock(&vw->vw_buf);
+
+    /* Rerun timer for screen updates. */
+    vt_resume_flush_timer(vd->vd_curwindow, 0);
+}
+#endif

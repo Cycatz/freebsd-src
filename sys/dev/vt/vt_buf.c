@@ -472,6 +472,9 @@ vtbuf_init(struct vt_buf *vb, const term_pos_t *p)
 
 		sz = vb->vb_history_size * sizeof(term_char_t *);
 		vb->vb_rows = malloc(sz, M_VTBUF, M_WAITOK | M_ZERO);
+
+		sz = p->tp_col * sizeof(term_char_t);
+		vb->vb_ime_buffer = malloc(sz, M_VTBUF, M_WAITOK | M_ZERO);
 	}
 
 	vtbuf_init_early(vb);

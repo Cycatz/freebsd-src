@@ -269,9 +269,6 @@ void vtbuf_extract_marked(struct vt_buf *vb, term_char_t *buf, int sz);
 	((vb)->vb_rows[((vb)->vb_roffset + (r)) % VTBUF_MAX_HEIGHT(vb)])
 
 #ifdef VT_IME
-#define VTBUF_GET_FIELD(vb, r, c) \
-	((vb)->vb_rows[((vb)->vb_roffset + (r)) % VTBUF_MAX_HEIGHT(vb)][(c)])
-#else
 inline term_char_t VTBUF_GET_FIELD(const struct vt_buf *vb, int r, int c)
 {
     if (vt_test && r == 0) {
@@ -280,7 +277,12 @@ inline term_char_t VTBUF_GET_FIELD(const struct vt_buf *vb, int r, int c)
         return ((vb)->vb_rows[((vb)->vb_roffset + (r)) % VTBUF_MAX_HEIGHT(vb)][(c)]);
     }
 }
+#else
+#define VTBUF_GET_FIELD(vb, r, c) \
+	((vb)->vb_rows[((vb)->vb_roffset + (r)) % VTBUF_MAX_HEIGHT(vb)][(c)])
+
 #endif
+
 #define	VTBUF_FIELD(vb, r, c) \
 	((vb)->vb_rows[((vb)->vb_curroffset + (r)) % VTBUF_MAX_HEIGHT(vb)][(c)])
 #define	VTBUF_ISCURSOR(vb, r, c) \
